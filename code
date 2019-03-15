@@ -1,0 +1,765 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <string.h>
+#include <assert.h>
+#define SINGLE 1
+#define BATCH 0
+#define REG_NUM 32
+#define INSTRUCTION_H
+
+
+//typedef enum OPCODE {ADD,SUB,ADDI,MUL,LW,SW,BEQ,HALT} opcode;
+
+typedef struct INSTRUCTION {
+    int op;
+    int rs;
+    int rt;
+    int rd;
+    int Imm;
+} inst;
+typedef struct{
+    inst pipeinst;
+    int validYet;
+    int instPC;
+    int operA;
+    int operB;
+    int afterEX;
+} latch;
+
+int m;
+int n;
+int c;
+inst *IMem;
+int *DMem;
+int *reg;
+latch IFID;
+latch IDEX;
+latch EXMEM;
+latch MEMWB;
+inst instemp;
+latch latchtemp;
+int totcyc;
+int IFcycle;
+int IDcycle;
+int EXcycle;
+int MEMcycle;
+int WBcycle;
+int pc;
+int haltpc;
+int branchinst;
+int IFlag;
+int EXlag;
+int MEMlag;
+int halt;
+int simRe;
+
+void IF(){
+    if((IFID.validYet == 0)&&(branchinst == 0)){
+        if(IFlag == 1){
+            IFID.pipeinst.op = IMem[pc].op;
+            IFID.pipeinst.rs = IMem[pc].rs;
+            IFID.pipeinst.rt = IMem[pc].rt;
+            IFID.pipeinst.rd = IMem[pc].rd;
+            IFID.pipeinst.Imm = IMem[pc].Imm;
+            IFID.instPC = pc;
+            IFID.validYet = 1;
+            //printf("%d %d %d %d %d\n", IFID.pipeinst.op,IFID.pipeinst.rs,IFID.pipeinst.rt, IFID.pipeinst.rd, IFID.pipeinst.Imm);
+            pc++;
+            if(pc>haltpc){
+                pc = haltpc;
+            }
+            IFcycle++;
+            IFlag = c;
+        }
+        else if(IMem[pc].op ==7){
+            IFID.pipeinst.op = IMem[pc].op;
+            IFID.pipeinst.rs = IMem[pc].rs;
+            IFID.pipeinst.rt = IMem[pc].rt;
+            IFID.pipeinst.rd = IMem[pc].rd;
+            IFID.pipeinst.Imm = IMem[pc].Imm;
+            IFID.instPC = pc;
+            IFID.validYet = 1;
+            //printf("%d %d %d %d %d\n", IFID.pipeinst.op,IFID.pipeinst.rs,IFID.pipeinst.rt, IFID.pipeinst.rd, IFID.pipeinst.Imm);
+        }
+        else{
+            IFlag -=1;
+            IFcycle ++;
+            assert(IFlag >0);
+        }
+    } else if (branchinst ==2){
+        branchinst = 0;
+    }
+
+
+    if(IFID.pipeinst.op ==7)
+        return;
+}
+int regReady(int check){
+    if(EXMEM.validYet ==1){
+        switch(EXMEM.pipeinst.op){
+            case 0: //add
+            case 1:  //sub
+            case 3: //mul
+                if(EXMEM.pipeinst.rd == check)
+                    return 1;
+                break;
+            case 4: //lw
+            case 2:  //addi
+                if(EXMEM.pipeinst.rt == check)
+                    return 1;
+                break;
+            case 5: //sw
+            case 6: //beq
+            case 7:  //halt
+                break;
+            default:
+            printf("INVALID OPCODE DETECTED IN EXMEM\n");
+            exit(1);
+        }
+    }
+    if(MEMWB.validYet ==1){
+        switch(MEMWB.pipeinst.op){
+            case 0:
+            case 2:
+            case 3:
+                if(MEMWB.pipeinst.rd == check)
+                    return 1;
+                break;
+            case 1:
+            case 5:
+                if(MEMWB.pipeinst.rt == check)
+                    return 1;
+                break;
+            case 4:
+            case 6:
+            case 7:
+                break;
+            default:
+            printf("INVALID OPCODE DETECTED IN MEMWB\n");
+            exit(1);
+        }
+    }
+    return 0;
+}
+
+void ID(){
+    if(IDEX.pipeinst.op ==7){
+        return;
+    }
+    printf("IDEX.pipeinst.op %d\n",IDEX.pipeinst.op);
+    if((IFID.validYet == 1)||(IDEX.validYet==0)){
+        if(regReady(IFID.pipeinst.rs)==1)
+            return;
+        switch(IFID.pipeinst.op){
+            case 0:
+            case 1:
+                if(regReady(IFID.pipeinst.rt)==1)
+                    return;
+                break;
+            case 3:
+                if(regReady(IFID.pipeinst.rt)==1) return;
+                IDEX = IFID;/////////////////////////////////////////////////////\
+
+                IDEX.operA = reg[IFID.pipeinst.rs];
+                IDEX.operB = reg[IFID.pipeinst.rt];
+                printf("%d %d %d %d %d %d %d \n", IDEX.pipeinst.op,IDEX.pipeinst.rs,IDEX.pipeinst.rt, IDEX.pipeinst.rd, IDEX.pipeinst.Imm,IDEX.operA,IDEX.operB);
+                EXlag = m;
+                break;
+            case 6:
+                if(regReady(IFID.pipeinst.rt)==1)
+                    return;
+                if((IFID.pipeinst.Imm < -32767)||(IFID.pipeinst.Imm > 32767)){
+                    printf("IMMEDIATE VALUE UNUSABLE, %d \n",IFID.pipeinst.Imm);
+                    exit(1);
+                }
+                IDEX = IFID;/////////////////////////////////////////////////////////
+
+                IDEX.operA = reg[IFID.pipeinst.rs];
+                IDEX.operB = reg[IFID.pipeinst.rt];
+                printf("%d %d %d %d %d %d %d \n", IDEX.pipeinst.op,IDEX.pipeinst.rs,IDEX.pipeinst.rt, IDEX.pipeinst.rd, IDEX.pipeinst.Imm,IDEX.operA,IDEX.operB);
+                branchinst = 1;
+                EXlag = n;
+                break;
+
+                case 2:
+                case 4:
+                    if((IFID.pipeinst.Imm < -32767)||(IFID.pipeinst.Imm > 32767)){
+                        printf("IMMEDIATE VALUE UNUSABLE, %d \n",IFID.pipeinst.Imm);
+                    exit(1);
+                    }
+
+                    IDEX = IFID;/////////////////////////////////////////////
+
+                    IDEX.operA = reg[IFID.pipeinst.rs];
+                    printf("%d %d %d %d %d %d %d \n", IDEX.pipeinst.op,IDEX.pipeinst.rs,IDEX.pipeinst.rt, IDEX.pipeinst.rd, IDEX.pipeinst.Imm,IDEX.operA,IDEX.operB);
+                    EXlag = n;
+                    break;
+                case 5:
+                    if(regReady(IFID.pipeinst.rt) == 1) return;
+
+                    if((IFID.pipeinst.Imm < -32767)||(IFID.pipeinst.Imm > 32767)){
+                        printf("IMMEDIATE VALUE UNUSABLE, %d \n",IFID.pipeinst.Imm);
+                    exit(1);
+                    }
+                    IDEX = IFID;////////////////////////////////////////////////////////////////////
+
+                    IDEX.operA = reg[IFID.pipeinst.rs];
+                    IDEX.operB = reg[IFID.pipeinst.rt];
+                    printf("%d %d %d %d %d %d %d \n", IDEX.pipeinst.op,IDEX.pipeinst.rs,IDEX.pipeinst.rt, IDEX.pipeinst.rd, IDEX.pipeinst.Imm,IDEX.operA,IDEX.operB);
+                    EXlag = n;
+                    break;
+
+                    case 7:
+                        IDEX = IFID;/////////////////////////////////////////////////////////////////
+                        printf("%d %d %d %d %d %d %d \n", IDEX.pipeinst.op,IDEX.pipeinst.rs,IDEX.pipeinst.rt, IDEX.pipeinst.rd, IDEX.pipeinst.Imm,IDEX.operA,IDEX.operB);
+                        EXlag = 1;
+                        return;
+
+                    default:
+                        printf("OPCODE not valid\n");
+                        exit(1);
+                        return;
+        }
+        IFID = latchtemp;
+        //printf("%d %d %d %d %d\n", IFID.pipeinst.op,IFID.pipeinst.rs,IFID.pipeinst.rt, IFID.pipeinst.rd, IFID.pipeinst.Imm);
+
+        IDcycle++;
+    }
+}
+void EX(){
+    if(IDEX.validYet ==1){
+        if((EXMEM.validYet == 0)&&(EXlag == 1)){
+            EXMEM = IDEX;
+            switch(IDEX.pipeinst.op){
+                case 0:
+                    EXMEM.afterEX = IDEX.operA + IDEX.operB;
+                    break;
+                case 1:
+                    EXMEM.afterEX = IDEX.operA - IDEX.operB; ///////////////change nums!!!
+                    break;
+                case 3:
+                    EXMEM.afterEX = IDEX.operA*IDEX.operB;
+                    break;
+                case 6:
+                    if(IDEX.operB == IDEX.operA)
+                        pc = IDEX.pipeinst.Imm + IDEX.instPC +1; //branch starts one addr ahead
+                    branchinst = 2;
+                    break;
+                case 2:
+                case 4:
+                case 5:
+                    EXMEM.afterEX = IDEX.operA + IDEX.pipeinst.Imm;
+                    break;
+                case 7:
+                    return;
+                default:
+                    printf("OPCODE not valid EX \n");
+                    exit(1);
+            }
+            IDEX = latchtemp;
+            EXcycle++;
+        }
+        else if(EXlag != 1){
+            EXlag --;
+            EXcycle++;
+            assert(EXlag > -1);
+
+        }
+    }
+    else if(EXMEM.pipeinst.op== 7)
+        return;
+
+}
+
+void MEM(){
+    if((MEMWB.validYet == 0)&&(EXMEM.validYet == 1)){
+        switch(EXMEM.pipeinst.op){
+            case 0:
+            case 2:
+            case 1:
+            case 3:
+            case 6:
+                MEMWB.pipeinst.op =EXMEM.pipeinst.op;
+                MEMWB.pipeinst.rs =EXMEM.pipeinst.rs;
+                MEMWB.pipeinst.rt =EXMEM.pipeinst.rt;
+                MEMWB.pipeinst.rd =EXMEM.pipeinst.rd;
+                MEMWB.pipeinst.Imm =EXMEM.pipeinst.Imm;
+                printf("MEMWB%d %d %d %d %d\n", MEMWB.pipeinst.op,MEMWB.pipeinst.rs,MEMWB.pipeinst.rt, MEMWB.pipeinst.rd, MEMWB.pipeinst.Imm);
+                EXMEM = latchtemp;
+                return;
+            case 4:
+                if(MEMlag == 1){
+                    MEMWB = EXMEM;
+                    //printf("%d %d %d %d %d\n", MEMWB.pipeinst.op,MEMWB.pipeinst.rs,MEMWB.pipeinst.rt, MEMWB.pipeinst.rd, MEMWB.pipeinst.Imm);
+                    if(EXMEM.afterEX % 4 != 0){
+                        printf("NUMERICAL ERROR, /4 INVALID \n");//////EXMEM.afterEX
+                        exit(1);
+                    }
+                    MEMWB.afterEX = DMem[EXMEM.afterEX/4];
+                    MEMlag = c;
+                    EXMEM = latchtemp;
+                    MEMcycle++;
+                }
+                else{
+                    MEMlag --;
+                    MEMcycle++;
+                    assert(MEMlag > 0);
+                }
+                return;
+            case 5:
+                if(MEMlag == 1){
+                    MEMWB = EXMEM;
+                    // printf("%d %d %d %d %d\n", MEMWB.pipeinst.op,MEMWB.pipeinst.rs,MEMWB.pipeinst.rt, MEMWB.pipeinst.rd, MEMWB.pipeinst.Imm);
+                    if(EXMEM.afterEX %4 != 0){
+                        printf("NUMERICAL ERROR, /4 INVALID \n");
+                        exit(1);
+                    }
+                    DMem[EXMEM.afterEX/4] = reg[EXMEM.pipeinst.rt];
+                    MEMlag = c;
+                    EXMEM = latchtemp;
+                    MEMcycle++;
+                }
+                else{
+                    MEMlag --;
+                    MEMcycle++;
+                    assert(MEMlag>0);
+                }
+                return;
+            case 7:
+                MEMWB.pipeinst = EXMEM.pipeinst;
+                MEMWB.instPC = EXMEM.instPC;
+                MEMWB.validYet = 1;
+                return;
+            default:
+            printf("OPCODE NOT RECOGNIZED WB \n");
+            exit(1);
+        }
+    }
+}
+
+void WB(){
+    if(MEMWB.validYet ==1){
+        switch(MEMWB.pipeinst.op){
+            case 0:
+            case 1:
+            case 3:
+                reg[MEMWB.pipeinst.rd] = MEMWB.afterEX;
+                printf("reg[MEMWB.pipeinst.rd] %d\n",reg[MEMWB.pipeinst.rd]);
+                break;
+            case 2:
+            case 4:
+                reg[MEMWB.pipeinst.rt] = MEMWB.afterEX;
+                break;
+            case 6:
+            case 5:
+            case 7:
+                MEMWB = latchtemp;
+                return;
+            default:
+                printf("OPCODE NOT RECOGNIZED WB\n");
+                exit(1);
+        }
+        MEMWB = latchtemp;
+        WBcycle++;
+        }
+}
+
+
+inst parser(char * instruction)
+{
+    char ** fields= (char **)calloc(20,sizeof(char *)); //Max character pointers = 20 I THINK
+    *(fields+1) = (char *)calloc(4,sizeof(char));
+    *(fields+2) = (char *)calloc(4,sizeof(char));
+    *(fields+3) = (char *)calloc(4,sizeof(char)); //Max characters = 4 when input = $zero
+
+    char delimiters[] = "$, \n()"; //What separates each field coming from regNumberConverter?
+    //int type; //R-type or I-type? R = 0; I = 1; halt = 2
+    inst pInst = {0,0,0,0,0};   //Initialize new instance of INSTRUCTION to be parsed
+
+    fields[0] = strtok(instruction,delimiters);
+    fields[1] = strtok(NULL,delimiters);
+    fields[2] = strtok(NULL,delimiters);
+    fields[3] = strtok(NULL,delimiters);
+    printf("%s \n",fields[0]);
+    printf("%s \n",fields[1]);
+    printf("%s \n",fields[2]);
+    printf("%s \n",fields[3]);
+
+    if(strcmp(fields[0],"ADD")==0){
+        pInst.op = 0;
+        pInst.rd = atoi(fields[1]);
+        pInst.rs = atoi(fields[2]);
+        pInst.rt = atoi(fields[3]);
+    }else if(strcmp(fields[0],"SUB")==0){
+        pInst.op = 1;
+        pInst.rd = atoi(fields[1]);
+        pInst.rs = atoi(fields[2]);
+        pInst.rt = atoi(fields[3]);
+    }else if(strcmp(fields[0],"ADDI")==0){
+        pInst.op = 2;
+        pInst.rs = atoi(fields[3]);
+        pInst.rt = atoi(fields[1]);
+        pInst.Imm = atoi(fields[2]);
+    }else if(strcmp(fields[0],"MUL")==0){
+        pInst.op = 3;
+        pInst.rd = atoi(fields[1]);
+        pInst.rs = atoi(fields[2]);
+        pInst.rt = atoi(fields[3]);
+    }else if(strcmp(fields[0],"LW")==0){
+        pInst.op = 4;
+        pInst.rs = atoi(fields[3]);
+        pInst.rt = atoi(fields[1]);
+        pInst.Imm = atoi(fields[2]);
+    }else if(strcmp(fields[0],"SW")==0){
+        pInst.op = 5;
+        pInst.rs = atoi(fields[1]);
+        pInst.rt = atoi(fields[3]);
+        pInst.Imm = atoi(fields[2]);
+    }else if(strcmp(fields[0],"BEQ")==0){
+        pInst.op = 6;
+        pInst.rs = atoi(fields[1]);
+        pInst.rt = atoi(fields[3]);
+        pInst.Imm = atoi(fields[2]);
+    }else if(strcmp(fields[0],"HALT")==0){
+        pInst.op = 7;
+    }else{
+        printf("INVALID OPCODE %s\n",fields[0]);
+        exit(1);
+    }
+    //char *temppp = (char*)malloc(sizeof(char)*100);
+
+    return pInst;
+}
+//char * regNumberConverter(char * instruction)
+/*{
+    char * token;
+    char * tokenCopy; //Point to beginning of string
+    char * strCopy; //Point to beginning of string
+    char delimiters[] = "$ \n";
+    char * result; //Save tokens here
+    result[0] = '\0'; //First address pointed to begins blank
+    char *tempp = (char*)malloc(sizeof(char)*100);
+    for (int i = 1, strCopy = *instruction; ;i++){
+        token = strtok_r(instruction,delimiters,&instruction);
+
+        char temp1[] = "zero";
+        char temp2[] = "0";
+        char space[] = " ";
+
+        if (token == NULL)
+            break;
+
+        if (strcmp(token,temp1)==0){
+            int j = 0;
+            while (j <= sizeof(token)/sizeof(char *)){
+                token[j] = temp2[j];
+                j++;
+            }
+        } //End length of token
+        result = strcat(result,token);
+        result = strcat(result,space);
+
+    } //End length of instruction
+    result[strlen(result)-1] = 0;
+    //printf("%s",result);
+    //return result;
+    strcpy(tempp,result);
+    return tempp;
+//
+}*/
+  char * regNumberConverter(char * instruction)
+{
+
+    char delimiters[] = " ";
+
+    char instFields[4][100];
+
+    strcpy(instFields[0],strtok(instruction, delimiters));
+    strcpy(instFields[1], strtok(NULL, delimiters));
+    strcpy(instFields[2], strtok(NULL, delimiters));
+    strcpy(instFields[3], strtok(NULL, delimiters));
+
+    for(int i = 1; i < 4; i++){
+    if(strcmp(instFields[i], "$zero") == 0 || strcmp(instFields[i], "$0") == 0){strcpy(instFields[i],"0");}
+    else if(strcmp(instFields[i], "$at") == 0 || strcmp(instFields[i], "$1") == 0){strcpy(instFields[i], "1");}
+    else if(strcmp(instFields[i], "$v0") == 0 || strcmp(instFields[i], "$2") == 0){strcpy(instFields[i], "2");}
+    else if(strcmp(instFields[i], "$v1") == 0 || strcmp(instFields[i], "$3") == 0){strcpy(instFields[i], "3");}
+    else if(strcmp(instFields[i], "$a0") == 0 || strcmp(instFields[i], "$4") == 0){strcpy(instFields[i], "4");}
+    else if(strcmp(instFields[i], "$a1") == 0 || strcmp(instFields[i], "$5") == 0){strcpy(instFields[i], "5");}
+    else if(strcmp(instFields[i], "$a2") == 0 || strcmp(instFields[i], "$6") == 0){strcpy(instFields[i], "6");}
+    else if(strcmp(instFields[i], "$a3") == 0 || strcmp(instFields[i], "$7") == 0){strcpy(instFields[i], "7");}
+    else if(strcmp(instFields[i], "$t0") == 0 || strcmp(instFields[i], "$8") == 0){strcpy(instFields[i], "8");}
+    else if(strcmp(instFields[i], "$t1") == 0 || strcmp(instFields[i], "$9") == 0){strcpy(instFields[i], "9");}
+    else if(strcmp(instFields[i], "$t2") == 0 || strcmp(instFields[i], "$10") == 0){strcpy(instFields[i], "10");}
+    else if(strcmp(instFields[i], "$t3") == 0 || strcmp(instFields[i], "$11") == 0){strcpy(instFields[i], "11");}
+    else if(strcmp(instFields[i], "$t4") == 0 || strcmp(instFields[i], "$12") == 0){strcpy(instFields[i], "12");}
+    else if(strcmp(instFields[i], "$t5") == 0 || strcmp(instFields[i], "$13") == 0){strcpy(instFields[i], "13");}
+    else if(strcmp(instFields[i], "$t6") == 0 || strcmp(instFields[i], "$14") == 0){strcpy(instFields[i], "14");}
+    else if(strcmp(instFields[i], "$t7") == 0 || strcmp(instFields[i], "$15") == 0){strcpy(instFields[i], "15");}
+    else if(strcmp(instFields[i], "$s0") == 0 || strcmp(instFields[i], "$16") == 0){strcpy(instFields[i], "16");}
+    else if(strcmp(instFields[i], "$s1") == 0 || strcmp(instFields[i], "$17") == 0){strcpy(instFields[i], "17");}
+    else if(strcmp(instFields[i], "$s2") == 0 || strcmp(instFields[i], "$18") == 0){strcpy(instFields[i], "18");}
+    else if(strcmp(instFields[i], "$s3") == 0 || strcmp(instFields[i], "$19") == 0){strcpy(instFields[i], "19");}
+    else if(strcmp(instFields[i], "$s4") == 0 || strcmp(instFields[i], "$20") == 0){strcpy(instFields[i], "20");}
+    else if(strcmp(instFields[i], "$s5") == 0 || strcmp(instFields[i], "$21") == 0){strcpy(instFields[i], "21");}
+    else if(strcmp(instFields[i], "$s6") == 0 || strcmp(instFields[i], "$22") == 0){strcpy(instFields[i], "22");}
+    else if(strcmp(instFields[i], "$s7") == 0 || strcmp(instFields[i], "$23") == 0){strcpy(instFields[i], "23");}
+    else if(strcmp(instFields[i], "$t8") == 0 || strcmp(instFields[i], "$24") == 0){strcpy(instFields[i], "24");}
+    else if(strcmp(instFields[i], "$t9") == 0 || strcmp(instFields[i], "$25") == 0){strcpy(instFields[i], "25");}
+    else if(strcmp(instFields[i], "$k0") == 0 || strcmp(instFields[i], "$26") == 0){strcpy(instFields[i], "26");}
+    else if(strcmp(instFields[i], "$k1") == 0 || strcmp(instFields[i], "$27") == 0){strcpy(instFields[i], "27");}
+    else if(strcmp(instFields[i], "$gp") == 0 || strcmp(instFields[i], "$28") == 0){strcpy(instFields[i], "28");}
+    else if(strcmp(instFields[i], "$sp") == 0 || strcmp(instFields[i], "$29") == 0){strcpy(instFields[i], "29");}
+    else if(strcmp(instFields[i], "$fp") == 0 || strcmp(instFields[i], "$30") == 0){strcpy(instFields[i], "30");}
+    else if(strcmp(instFields[i], "$ra") == 0 || strcmp(instFields[i], "$31") == 0){strcpy(instFields[i], "31");}
+    }
+
+    char newInst[100];
+    strcpy(newInst, instFields[0]);
+    strcat(newInst, " ");
+    strcat(newInst, instFields[1]);
+    strcat(newInst, " ");
+    strcat(newInst, instFields[2]);
+    strcat(newInst, " ");
+    strcat(newInst, instFields[3]);
+
+    char *newInstruction = (char *)calloc(100,sizeof(char));
+    strcpy(newInstruction, newInst);
+
+    return newInstruction;
+}
+
+char * progScanner(FILE *inputFile){
+    //char *instruction = *inputFile;
+    //fgets(instruction, 30, inputFile);
+    char instruction[100];
+    if(fgets(instruction, 100, inputFile) != NULL){
+        char *temp = (char*)calloc(100,sizeof(char));
+        if(instruction == NULL) return NULL;
+        char result[30];
+        char *ptr= instruction;
+        int i = 0;
+        while(*ptr != '\0'){
+            if(*ptr == '(' || *ptr == ')' || *ptr == ',' || *ptr == ' ' ){
+                if(*(ptr+1) != '(' && *(ptr+1) != ')' && *(ptr+1) != ',' && *(ptr+1) != ' ' ){
+                    result[i] = ' ';
+                    i++;
+                }
+            }
+            else{
+                result[i] = *ptr;
+                i++;
+            }
+            ptr++;
+        }
+       result[i] = '\0';
+        //printf("%s\n",result);
+        strcpy(temp,result);
+
+        return temp;
+    }
+    return NULL;
+}
+
+
+/*int main()
+{
+    //struct inst poop;
+    inst * poop = (inst *)calloc(1,sizeof(inst));
+
+    char example[] = "LW, $zero, 10($t0)";
+    char * ptr;
+
+    ptr= progScanner(example);
+    printf("%s\n",ptr);
+    ptr = regNumberConverter(ptr);
+    printf("%s\n",ptr);
+    *poop = parser(ptr);
+
+}*/
+
+
+int main(int argc, char* argv[]){
+    //instantiate the Mem's
+    IMem = (inst *) malloc(512*sizeof(inst));           //iMem can hold 512 instructions so we index it as such
+    DMem = (int *) malloc(512*sizeof(int));             //Data memory is stored as words since that is the smallest unit we will be using here
+    int i;
+    for(i=0; i < 512; i++){
+        DMem[i] = 0;
+    }
+    //instantiate the registers
+    reg = (int *) malloc(32*sizeof(int));
+    for(i=0; i < 32; i++){
+        reg[i] = 0;
+    }
+    //instantiates the utilization data collection variables
+    totcyc = 0;
+    IFcycle = 0;
+    IDcycle = 0;
+    EXcycle = 0;
+    MEMcycle = 0;
+    WBcycle = 0;
+    //instantiates general function variables
+    pc = 0;
+    halt = 1;
+    instemp = (inst) {0, 0, 0, 0, 0};
+    latchtemp = (latch) {instemp, 0, 0, 0, 0, 0};
+    IFID = latchtemp;
+    IDEX = latchtemp;
+    EXMEM = latchtemp;
+    MEMWB = latchtemp;
+    //Parse inputs to get file name, Mem time c, Multiply time m, EX op time n
+    char * inputFileName = (char *) malloc(20*sizeof(char));
+    strcpy(inputFileName, argv[argc-5]);
+    c = atoi(argv[argc-4]);
+    m = atoi(argv[argc-3]);
+    n = atoi(argv[argc-2]);
+    simRe = atoi(argv[argc-1]);                       //0 for single cycle, 1 for batch
+    IFlag = c;
+    EXlag = 1;
+    MEMlag = c;
+
+
+    assert(c>0);                                        //These three variables should be greater than 0, or else it causes problems later
+    assert(m>0);
+    assert(n>0);
+
+    assert((simRe==0)||(simRe==1));                 //There are only two options for simMode, catches if there is an error in this assignment
+
+
+    //Instruction Parsing block
+    char * instruction = (char *) malloc(100*sizeof(char));
+    char * fullInput = (char *) malloc(30*sizeof(char));
+    strcpy(fullInput, "./");
+    strcat(fullInput, inputFileName);
+    FILE * inputFile = fopen(fullInput, "r");
+    do{
+        instruction = progScanner(inputFile);
+        instruction = regNumberConverter(instruction);
+        instemp = parser(instruction);
+        //printf("AAAAAAAAAAAAA \n");
+        IMem[pc] = instemp;
+        pc += 1;
+        haltpc = pc-1;                                  //assigns for every pc, the last assignment will be the halt code
+        assert(pc < 512);                             //Only 512 instructions fit in the memory
+    } while(instemp.op != 7);
+    fclose(inputFile);
+
+    //Reset tempInst so it can be used to clear latches
+    instemp = (inst) {0, 0, 0, 0, 0};
+    pc = 0;
+    //IFID.pipeinst.op=0;                                           //reset pc to 0
+   // printf("%s\n", "hh");
+    while((IFID.pipeinst.op != 7)||(IDEX.pipeinst.op != 7)||(EXMEM.pipeinst.op != 7)||(MEMWB.pipeinst.op != 7)){
+        WB();
+        MEM();
+        EX();
+        ID();
+        IF();
+        totcyc++;
+        if(simRe == 1){
+            for(i=1;i<32;i++){
+                printf("Register %d contains %d \n", i, reg[i]);
+            }
+            printf("PC is %d \n", pc);
+            getchar();
+        }
+    }
+    printf("Total Cycles: %d \n", totcyc);
+    printf("IF Utilization: %d\% \n", ((IFcycle * 100)/totcyc));
+    printf("ID Utilization: %d\% \n", ((IDcycle * 100)/totcyc));
+    printf("EX Utilization: %d\% \n", ((EXcycle * 100)/totcyc));
+    printf("MEM Utilization: %d\% \n", ((MEMcycle * 100)/totcyc));
+    printf("WB Utilization: %d\% \n", ((WBcycle * 100)/totcyc));
+
+    for(i=1;i<32;i++){
+        printf("Register %d contains %d \n", i, reg[i]);
+    }
+    printf("PC is %d \n", pc);
+
+}
+/*
+int main (int argc, char *argv[]){
+    int sim_mode=0;//mode flag, 1 for single-cycle, 0 for batch
+    int c,m,n;
+    int i;//for loop counter
+    long mips_reg[REG_NUM];
+    long pgm_c=0;//program counter
+    long sim_cycle=0;//simulation cycle counter
+    //define your own counter for the usage of each pipeline stage here
+
+    int test_counter=0;
+    FILE *input=NULL;
+    FILE *output=NULL;
+    printf("The arguments are:");
+
+    for(i=1;i<argc;i++){
+        printf("%s ",argv[i]);
+    }
+    printf("\n");
+    if(argc==7){
+        if(strcmp("-s",argv[1])==0){
+            sim_mode=SINGLE;
+        }
+        else if(strcmp("-b",argv[1])==0){
+            sim_mode=BATCH;
+        }
+        else{
+            printf("Wrong sim mode chosen\n");
+            exit(0);
+        }
+
+        m=atoi(argv[2]);
+        n=atoi(argv[3]);
+        c=atoi(argv[4]);
+        input=fopen(argv[5],"r");
+        output=fopen(argv[6],"w");
+
+    }
+
+    else{
+        printf("Usage: ./sim-mips -s m n c input_name output_name (single-sysle mode)\n or \n ./sim-mips -b m n c input_name  output_name(batch mode)\n");
+        printf("m,n,c stand for number of cycles needed by multiplication, other operation, and memory access, respectively\n");
+        exit(0);
+    }
+    if(input==NULL){
+        printf("Unable to open input or output file\n");
+        exit(0);
+    }
+    if(output==NULL){
+        printf("Cannot create output file\n");
+        exit(0);
+    }
+    //initialize registers and program counter
+    if(sim_mode==1){
+        for (i=0;i<REG_NUM;i++){
+            mips_reg[i]=0;
+        }
+    }
+
+    if(sim_mode==1){
+        printf("cycle: %d register value: ",sim_cycle);
+        for (i=1;i<REG_NUM;i++){
+            printf("%d  ",mips_reg[i]);
+        }
+        printf("program counter: %d\n",pgm_c);
+        printf("press ENTER to continue\n");
+        while(getchar() != '\n');
+    }
+
+    sim_cycle+=1;
+
+
+
+
+
+
+
+
+
+
+    return 0;
+}*/
+
+
